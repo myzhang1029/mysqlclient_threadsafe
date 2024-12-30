@@ -1116,10 +1116,12 @@ _mysql_string_literal(
         PyObject *t = PyObject_Str(o);
         if (!t) return NULL;
 
-        ACQUIRE_LOCK(self);
-        const char *encoding = (self && self->open) ?
-            _get_encoding(&self->connection) : utf8;
-        RELEASE_LOCK(self);
+        const char *encoding = utf8;
+        if (self && self->open) {
+            ACQUIRE_LOCK(self);
+            encoding = _get_encoding(&self->connection);
+            RELEASE_LOCK(self);
+        }
         if (encoding == utf8) {
             s = t;
         }
