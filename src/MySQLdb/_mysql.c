@@ -294,6 +294,7 @@ _mysql_ResultObject_Initialize(
     self->conn = (PyObject *) conn;
     Py_INCREF(conn);
     self->use = use;
+    ACQUIRE_LOCK(conn);
     Py_BEGIN_ALLOW_THREADS ;
     if (use)
         result = mysql_use_result(&(conn->connection));
@@ -304,6 +305,7 @@ _mysql_ResultObject_Initialize(
     Py_END_ALLOW_THREADS ;
 
     self->encoding = _get_encoding(&(conn->connection));
+    RELEASE_LOCK(conn);
     //fprintf(stderr, "encoding=%s\n", self->encoding);
     if (!result) {
         if (mysql_errno(&(conn->connection))) {
@@ -795,7 +797,9 @@ _mysql_ConnectionObject_affected_rows(
 {
     my_ulonglong ret;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     ret = mysql_affected_rows(&(self->connection));
+    RELEASE_LOCK(self);
     if (ret == (my_ulonglong)-1)
         return PyLong_FromLong(-1);
     return PyLong_FromUnsignedLongLong(ret);
@@ -831,9 +835,11 @@ _mysql_ConnectionObject_dump_debug_info(
 {
     int err;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     err = mysql_dump_debug_info(&(self->connection));
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (err) return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -983,7 +989,10 @@ _mysql_ConnectionObject_sqlstate(
     PyObject *noargs)
 {
     check_connection(self);
-    return PyUnicode_FromString(mysql_sqlstate(&(self->connection)));
+    ACQUIRE_LOCK(self);
+    PyObject *ret = PyUnicode_FromString(mysql_sqlstate(&(self->connection)));
+    RELEASE_LOCK(self);
+    return ret;
 }
 
 static char _mysql_ConnectionObject_warning_count__doc__[] =
@@ -998,7 +1007,10 @@ _mysql_ConnectionObject_warning_count(
     PyObject *noargs)
 {
     check_connection(self);
-    return PyLong_FromLong(mysql_warning_count(&(self->connection)));
+    ACQUIRE_LOCK(self);
+    PyObject *ret = PyLong_FromLong(mysql_warning_count(&(self->connection)));
+    RELEASE_LOCK(self);
+    return ret;
 }
 
 static char _mysql_ConnectionObject_errno__doc__[] =
@@ -1013,7 +1025,10 @@ _mysql_ConnectionObject_errno(
     PyObject *noargs)
 {
     check_connection(self);
-    return PyLong_FromLong((long)mysql_errno(&(self->connection)));
+    ACQUIRE_LOCK(self);
+    PyObject *ret = PyLong_FromLong((long)mysql_errno(&(self->connection)));
+    RELEASE_LOCK(self);
+    return ret;
 }
 
 static char _mysql_ConnectionObject_error__doc__[] =
@@ -1028,7 +1043,10 @@ _mysql_ConnectionObject_error(
     PyObject *noargs)
 {
     check_connection(self);
-    return PyUnicode_FromString(mysql_error(&(self->connection)));
+    ACQUIRE_LOCK(self);
+    PyObject *ret = PyUnicode_FromString(mysql_error(&(self->connection)));
+    RELEASE_LOCK(self);
+    return ret;
 }
 
 static char _mysql_escape_string__doc__[] =
@@ -1056,11 +1074,13 @@ _mysql_escape_string(
     if (self && PyModule_Check((PyObject*)self))
         self = NULL;
     if (self && self->open) {
+        ACQUIRE_LOCK(self);
 #if MYSQL_VERSION_ID >= 50707 && !defined(MARIADB_BASE_VERSION) && !defined(MARIADB_VERSION_ID)
         len = mysql_real_escape_string_quote(&(self->connection), out, in, size, '\'');
 #else
         len = mysql_real_escape_string(&(self->connection), out, in, size);
 #endif
+        RELEASE_LOCK(self);
     } else {
         len = mysql_escape_string(out, in, size);
     }
@@ -1096,8 +1116,10 @@ _mysql_string_literal(
         PyObject *t = PyObject_Str(o);
         if (!t) return NULL;
 
+        ACQUIRE_LOCK(self);
         const char *encoding = (self && self->open) ?
             _get_encoding(&self->connection) : utf8;
+        RELEASE_LOCK(self);
         if (encoding == utf8) {
             s = t;
         }
@@ -1130,11 +1152,13 @@ _mysql_string_literal(
     // escape
     unsigned long len;
     if (self && self->open) {
+        ACQUIRE_LOCK(self);
 #if MYSQL_VERSION_ID >= 50707 && !defined(MARIADB_BASE_VERSION) && !defined(MARIADB_VERSION_ID)
         len = mysql_real_escape_string_quote(&(self->connection), out+1, in, size, '\'');
 #else
         len = mysql_real_escape_string(&(self->connection), out+1, in, size);
 #endif
+        RELEASE_LOCK(self);
     } else {
         len = mysql_escape_string(out+1, in, size);
     }
@@ -1661,9 +1685,11 @@ _mysql_ConnectionObject_change_user(
                      kwlist, &user, &pwd, &db))
         return NULL;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
         r = mysql_change_user(&(self->connection), user, pwd, db);
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (r)     return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -1680,7 +1706,9 @@ _mysql_ConnectionObject_character_set_name(
 {
     const char *s;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     s = mysql_character_set_name(&(self->connection));
+    RELEASE_LOCK(self);
     return PyUnicode_FromString(s);
 }
 
@@ -1698,9 +1726,11 @@ _mysql_ConnectionObject_set_character_set(
     int err;
     if (!PyArg_ParseTuple(args, "s", &s)) return NULL;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     err = mysql_set_character_set(&(self->connection), s);
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (err) return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -1736,7 +1766,9 @@ _mysql_ConnectionObject_get_character_set_info(
     MY_CHARSET_INFO cs;
 
     check_connection(self);
+    ACQUIRE_LOCK(self);
     mysql_get_character_set_info(&(self->connection), &cs);
+    RELEASE_LOCK(self);
     if (!(result = PyDict_New())) return NULL;
     if (cs.csname)
         PyDict_SetItemString(result, "name", PyUnicode_FromString(cs.csname));
@@ -1768,8 +1800,10 @@ _mysql_ConnectionObject_get_native_connection(
 {
     PyObject *result;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     result = PyCapsule_New(&(self->connection),
         "_mysql.connection.native_connection", NULL);
+    RELEASE_LOCK(self);
     return result;
 }
 
@@ -1796,7 +1830,10 @@ _mysql_ConnectionObject_get_host_info(
     PyObject *noargs)
 {
     check_connection(self);
-    return PyUnicode_FromString(mysql_get_host_info(&(self->connection)));
+    ACQUIRE_LOCK(self);
+    PyObject *ret = PyUnicode_FromString(mysql_get_host_info(&(self->connection)));
+    RELEASE_LOCK(self);
+    return ret;
 }
 
 static char _mysql_ConnectionObject_get_proto_info__doc__[] =
@@ -1810,7 +1847,10 @@ _mysql_ConnectionObject_get_proto_info(
     PyObject *noargs)
 {
     check_connection(self);
-    return PyLong_FromLong((long)mysql_get_proto_info(&(self->connection)));
+    ACQUIRE_LOCK(self);
+    PyObject *ret = PyLong_FromLong((long)mysql_get_proto_info(&(self->connection)));
+    RELEASE_LOCK(self);
+    return ret;
 }
 
 static char _mysql_ConnectionObject_get_server_info__doc__[] =
@@ -1824,7 +1864,10 @@ _mysql_ConnectionObject_get_server_info(
     PyObject *noargs)
 {
     check_connection(self);
-    return PyUnicode_FromString(mysql_get_server_info(&(self->connection)));
+    ACQUIRE_LOCK(self);
+    PyObject *ret = PyUnicode_FromString(mysql_get_server_info(&(self->connection)));
+    RELEASE_LOCK(self);
+    return ret;
 }
 
 static char _mysql_ConnectionObject_info__doc__[] =
@@ -1840,7 +1883,9 @@ _mysql_ConnectionObject_info(
 {
     const char *s;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     s = mysql_info(&(self->connection));
+    RELEASE_LOCK(self);
     if (s) return PyUnicode_FromString(s);
     Py_RETURN_NONE;
 }
@@ -1915,7 +1960,10 @@ _mysql_ConnectionObject_field_count(
     PyObject *noargs)
 {
     check_connection(self);
-    return PyLong_FromLong((long)mysql_field_count(&(self->connection)));
+    ACQUIRE_LOCK(self);
+    PyObject *ret = PyLong_FromLong((long)mysql_field_count(&(self->connection)));
+    RELEASE_LOCK(self);
+    return ret;
 }
 
 static char _mysql_ConnectionObject_fileno__doc__[] =
@@ -1929,7 +1977,10 @@ _mysql_ConnectionObject_fileno(
     PyObject *noargs)
 {
     check_connection(self);
-    return PyLong_FromLong(self->connection.net.fd);
+    ACQUIRE_LOCK(self);
+    PyObject *ret = PyLong_FromLong(self->connection.net.fd);
+    RELEASE_LOCK(self);
+    return ret;
 }
 
 static char _mysql_ResultObject_num_fields__doc__[] =
@@ -1986,6 +2037,7 @@ _mysql_ConnectionObject_ping(
     int reconnect = 0;
     if (!PyArg_ParseTuple(args, "|p", &reconnect)) return NULL;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     if (reconnect != (self->reconnect == true)) {
         // libmysqlclient show warning to stderr when MYSQL_OPT_RECONNECT is used.
         // so we avoid using it as possible for now.
@@ -1997,7 +2049,6 @@ _mysql_ConnectionObject_ping(
         self->reconnect = (bool)reconnect;
     }
     int r;
-    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     r = mysql_ping(&(self->connection));
     Py_END_ALLOW_THREADS
@@ -2209,7 +2260,9 @@ _mysql_ConnectionObject_thread_id(
 {
     unsigned long pid;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     pid = mysql_thread_id(&(self->connection));
+    RELEASE_LOCK(self);
     return PyLong_FromLong((long)pid);
 }
 
@@ -2264,13 +2317,18 @@ _mysql_ConnectionObject_discard_result(
 
     Py_BEGIN_ALLOW_THREADS;
 
+    ACQUIRE_LOCK(self);
     MYSQL_RES *res = mysql_use_result(conn);
+    RELEASE_LOCK(self);
     if (res == NULL) {
         Py_BLOCK_THREADS;
+        ACQUIRE_LOCK(self);
         if (mysql_errno(conn) != 0) {
             // fprintf(stderr, "mysql_use_result failed: %s\n", mysql_error(conn));
+            RELEASE_LOCK(self);
             return _mysql_Exception(self);
         }
+        RELEASE_LOCK(self);
         Py_RETURN_NONE;
     }
 
@@ -2280,8 +2338,10 @@ _mysql_ConnectionObject_discard_result(
     }
     mysql_free_result(res);
     Py_END_ALLOW_THREADS;
+    ACQUIRE_LOCK(self);
     if (mysql_errno(conn)) {
         // fprintf(stderr, "mysql_free_result failed: %s\n", mysql_error(conn));
+        RELEASE_LOCK(self);
         return _mysql_Exception(self);
     }
     Py_RETURN_NONE;
@@ -2293,8 +2353,10 @@ _mysql_ConnectionObject_dealloc(
 {
     PyObject_GC_UnTrack(self);
     if (self->open) {
+        ACQUIRE_LOCK(self);
         mysql_close(&(self->connection));
         self->open = false;
+        RELEASE_LOCK(self);
     }
     Py_CLEAR(self->converter);
     #ifdef WITH_THREAD
@@ -2311,9 +2373,12 @@ _mysql_ConnectionObject_repr(
     _mysql_ConnectionObject *self)
 {
     char buf[300];
-    if (self->open)
+    if (self->open) {
+        ACQUIRE_LOCK(self);
         snprintf(buf, 300, "<_mysql.connection open to '%.256s' at %p>",
             self->connection.host, self);
+        RELEASE_LOCK(self);
+    }
     else
         snprintf(buf, 300, "<_mysql.connection closed at %p>", self);
     return PyUnicode_FromString(buf);
