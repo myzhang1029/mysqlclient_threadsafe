@@ -59,6 +59,10 @@ PERFORMANCE OF THIS SOFTWARE.
 #error "Python 2 is not supported"
 #endif
 
+#ifdef WITH_THREAD
+#include "pythread.h"
+#endif
+
 #include "bytesobject.h"
 #include "structmember.h"
 #include "errmsg.h"
@@ -84,6 +88,9 @@ typedef struct {
     bool open;
     bool reconnect;
     PyObject *converter;
+#ifdef WITH_THREAD
+    PyThread_type_lock lock;
+#endif
 } _mysql_ConnectionObject;
 
 #define check_connection(c) \
@@ -93,6 +100,19 @@ typedef struct {
 
 #define result_connection(r) ((_mysql_ConnectionObject *)r->conn)
 #define check_result_connection(r) check_connection(result_connection(r))
+
+#ifdef WITH_THREAD
+#define ACQUIRE_LOCK(obj) do { \
+    if (!PyThread_acquire_lock((obj)->lock, 0)) { \
+        Py_BEGIN_ALLOW_THREADS \
+        PyThread_acquire_lock((obj)->lock, 1); \
+        Py_END_ALLOW_THREADS \
+    } } while (0)
+#define RELEASE_LOCK(obj) PyThread_release_lock((obj)->lock)
+#else
+#define ACQUIRE_LOCK(obj)
+#define RELEASE_LOCK(obj)
+#endif
 
 extern PyTypeObject _mysql_ConnectionObject_Type;
 
@@ -638,6 +658,14 @@ _mysql_ConnectionObject_Initialize(
         return -1;
     self->converter = conv;
 
+#ifdef WITH_THREAD
+    self->lock = PyThread_allocate_lock();
+    if (self->lock == NULL) {
+        PyErr_SetString(PyExc_MemoryError, "Unable to allocate thread lock.");
+        return -2;
+    }
+#endif
+
     /*
       PyType_GenericAlloc() automatically sets up GC allocation and
       tracking for GC objects, at least in 2.2.1, so it does not need to
@@ -745,9 +773,11 @@ _mysql_ConnectionObject_close(
     PyObject *noargs)
 {
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     mysql_close(&(self->connection));
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     self->open = false;
     _mysql_ConnectionObject_clear(self);
     Py_RETURN_NONE;
@@ -819,9 +849,11 @@ _mysql_ConnectionObject_autocommit(
     int flag, err;
     if (!PyArg_ParseTuple(args, "i", &flag)) return NULL;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     err = mysql_autocommit(&(self->connection), flag);
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (err) return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -851,9 +883,11 @@ _mysql_ConnectionObject_commit(
 {
     int err;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     err = mysql_commit(&(self->connection));
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (err) return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -868,9 +902,11 @@ _mysql_ConnectionObject_rollback(
 {
     int err;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     err = mysql_rollback(&(self->connection));
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (err) return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -895,9 +931,11 @@ _mysql_ConnectionObject_next_result(
 {
     int err;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     err = mysql_next_result(&(self->connection));
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (err > 0) return _mysql_Exception(self);
     return PyLong_FromLong(err);
 }
@@ -918,9 +956,11 @@ _mysql_ConnectionObject_set_server_option(
     if (!PyArg_ParseTuple(args, "i", &flags))
         return NULL;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     err = mysql_set_server_option(&(self->connection), flags);
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (err) return _mysql_Exception(self);
     return PyLong_FromLong(err);
 }
@@ -1833,7 +1873,9 @@ _mysql_ConnectionObject_insert_id(
 {
     my_ulonglong r;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     r = mysql_insert_id(&(self->connection));
+    RELEASE_LOCK(self);
     return PyLong_FromUnsignedLongLong(r);
 }
 
@@ -1852,9 +1894,11 @@ _mysql_ConnectionObject_kill(
     if (!PyArg_ParseTuple(args, "k:kill", &pid)) return NULL;
     check_connection(self);
     snprintf(query, 50, "KILL %lu", pid);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     r = mysql_query(&(self->connection), query);
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (r) return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -1953,9 +1997,11 @@ _mysql_ConnectionObject_ping(
         self->reconnect = (bool)reconnect;
     }
     int r;
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     r = mysql_ping(&(self->connection));
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (r) return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -1977,9 +2023,11 @@ _mysql_ConnectionObject_query(
     if (!PyArg_ParseTuple(args, "s#:query", &query, &len)) return NULL;
     check_connection(self);
 
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     r = mysql_real_query(&(self->connection), query, len);
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (r) return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -2001,9 +2049,11 @@ _mysql_ConnectionObject_send_query(
     if (!PyArg_ParseTuple(args, "s#:query", &query, &len)) return NULL;
     check_connection(self);
 
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     r = mysql_send_query(mysql, query, len);
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (r) return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -2021,9 +2071,11 @@ _mysql_ConnectionObject_read_query_result(
     MYSQL *mysql = &(self->connection);
     check_connection(self);
 
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     r = (int)mysql_read_query_result(mysql);
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (r) return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -2049,9 +2101,11 @@ _mysql_ConnectionObject_select_db(
     int r;
     if (!PyArg_ParseTuple(args, "s:select_db", &db)) return NULL;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     r = mysql_select_db(&(self->connection), db);
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (r)     return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -2068,9 +2122,11 @@ _mysql_ConnectionObject_shutdown(
 {
     int r;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     r = mysql_query(&(self->connection), "SHUTDOWN");
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (r) return _mysql_Exception(self);
     Py_RETURN_NONE;
 }
@@ -2089,9 +2145,11 @@ _mysql_ConnectionObject_stat(
 {
     const char *s;
     check_connection(self);
+    ACQUIRE_LOCK(self);
     Py_BEGIN_ALLOW_THREADS
     s = mysql_stat(&(self->connection));
     Py_END_ALLOW_THREADS
+    RELEASE_LOCK(self);
     if (!s) return _mysql_Exception(self);
     return PyUnicode_FromString(s);
 }
@@ -2239,6 +2297,12 @@ _mysql_ConnectionObject_dealloc(
         self->open = false;
     }
     Py_CLEAR(self->converter);
+    #ifdef WITH_THREAD
+        if (self->lock) {
+            PyThread_free_lock(self->lock);
+            self->lock = NULL;
+        }
+    #endif
     MyFree(self);
 }
 
