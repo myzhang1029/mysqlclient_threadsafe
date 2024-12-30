@@ -248,6 +248,9 @@ static const char*
 _get_encoding(MYSQL *mysql)
 {
     MY_CHARSET_INFO cs;
+    if (!mysql->charset) {
+        return utf8;
+    }
     mysql_get_character_set_info(mysql, &cs);
     if (strncmp(utf8, cs.csname, 4) == 0) { // utf8, utf8mb3, utf8mb4
         return utf8;
